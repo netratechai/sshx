@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use ansi_term::Color::{Cyan, Fixed, Green};
 use anyhow::Result;
 use clap::Parser;
-use sshx::{controller::Controller, runner::Runner, terminal::get_default_shell};
+use sshx::{controller::Controller, runner::Runner, terminal::get_default_shell, tunnel};
 use tokio::signal;
 use tracing::error;
 
@@ -31,6 +31,21 @@ struct Args {
     /// editors.
     #[clap(long)]
     enable_readers: bool,
+
+    /// Local port forwarding (like ssh -L). Format: [bind_address:]port:host:hostport
+    /// Example: 8080:localhost:80 or 0.0.0.0:8080:example.com:80
+    #[clap(short = 'L', long = "local")]
+    local_forward: Vec<String>,
+
+    /// Remote port forwarding (like ssh -R). Format: [bind_address:]port:host:hostport
+    /// Example: 8080:localhost:3000
+    #[clap(short = 'R', long = "remote")]
+    remote_forward: Vec<String>,
+
+    /// Dynamic port forwarding / SOCKS proxy (like ssh -D). Format: [bind_address:]port
+    /// Example: 1080 or 0.0.0.0:1080
+    #[clap(short = 'D', long = "dynamic")]
+    dynamic_forward: Vec<String>,
 }
 
 fn print_greeting(shell: &str, controller: &Controller) {
@@ -73,6 +88,52 @@ fn print_greeting(shell: &str, controller: &Controller) {
 
 #[tokio::main]
 async fn start(args: Args) -> Result<()> {
+    // Parse tunnel configurations if provided
+    let tunnel_configs = tunnel::parse_tunnel_args(
+        &args.local_forward,
+        &args.remote_forward,
+        &args.dynamic_forward,
+    )?;
+
+    // Start tunnel listeners if any tunnels are configured
+    if !tunnel_configs.is_empty() {
+        for config in tunnel_configs {
+            match config {
+                tunnel::TunnelConfig::Local {
+                    bind_addr,
+                    target_host,
+                    target_port,
+                } => {
+                    tokio::spawn(async move {
+                        if let Err(e) =
+                            tunnel::run_local_forward(bind_addr, target_host, target_port).await
+                        {
+                            error!("Local forward error: {}", e);
+                        }
+                    });
+                }
+                tunnel::TunnelConfig::Dynamic { bind_addr } => {
+                    tokio::spawn(async move {
+                        if let Err(e) = tunnel::run_dynamic_forward(bind_addr).await {
+                            error!("Dynamic forward error: {}", e);
+                        }
+                    });
+                }
+                tunnel::TunnelConfig::Remote {
+                    bind_addr,
+                    target_host,
+                    target_port,
+                } => {
+                    // Remote forwarding would need server-side support
+                    error!(
+                        "Remote forwarding not yet fully implemented: {} -> {}:{}",
+                        bind_addr, target_host, target_port
+                    );
+                }
+            }
+        }
+    }
+
     let shell = match args.shell {
         Some(shell) => shell,
         None => get_default_shell().await,

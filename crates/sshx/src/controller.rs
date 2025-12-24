@@ -234,6 +234,20 @@ impl Controller {
                         warn!(%msg.id, "received resize for non-existing shell");
                     }
                 }
+                ServerMessage::TunnelData(tunnel_data) => {
+                    // Handle tunnel data from server (for future remote forwarding support)
+                    let data = self.encrypt.segment(0x200000000, tunnel_data.offset, &tunnel_data.data);
+                    if let Some(sender) = self.shells_tx.get(&Sid(tunnel_data.id)) {
+                        sender.send(ShellData::Data(data)).await.ok();
+                    } else {
+                        debug!(%tunnel_data.id, "received tunnel data for non-existing tunnel");
+                    }
+                }
+                ServerMessage::CloseTunnel(tunnel_close) => {
+                    // Handle tunnel close from server (for future remote forwarding support)
+                    self.shells_tx.remove(&Sid(tunnel_close.id));
+                    debug!(%tunnel_close.id, "tunnel closed by server");
+                }
                 ServerMessage::Ping(ts) => {
                     // Echo back the timestamp, for stateless latency measurement.
                     send_msg(&tx, ClientMessage::Pong(ts)).await?;
