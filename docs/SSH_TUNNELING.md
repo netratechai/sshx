@@ -173,16 +173,25 @@ Ensure the target service is running and accessible from the sshx client machine
 
 ## Limitations
 
-1. **Current Implementation**: The initial implementation provides direct port forwarding. Full integration with the sshx protocol for tunneling through the web-based interface is planned for future releases.
+1. **Hybrid Architecture**: The current implementation uses direct TCP connections for immediate usability. The sshx protocol has been extended with tunnel messages (TunnelOpen, TunnelData, TunnelClose), and the client-side runner architecture supports protocol-integrated tunnels. Full end-to-end protocol routing requires server-side implementation.
 
-2. **Remote Forwarding**: Remote port forwarding (`-R`) requires server-side support and may not be available on all sshx servers.
+2. **Remote Forwarding**: Remote port forwarding (`-R`) requires server-side support and is not yet available.
 
 3. **Protocol Support**: Dynamic forwarding only supports TCP connections, not UDP.
+
+## Protocol Integration Status
+
+The groundwork for deep protocol integration is complete:
+- ✅ Protobuf messages defined (TunnelOpen, TunnelData, TunnelClose)
+- ✅ Runner::Tunnel variant implemented
+- ✅ Controller handlers for tunnel messages
+- ⏳ Server-side tunnel routing (pending)
+- ⏳ Web interface tunnel management (pending)
 
 ## Future Enhancements
 
 Planned improvements include:
-- Full integration with sshx protocol for web-based tunnel management
+- Server-side implementation for full protocol routing
 - Visual tunnel status in the web interface
 - Automatic reconnection for long-running tunnels
 - Tunnel traffic statistics and monitoring

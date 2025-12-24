@@ -24,6 +24,14 @@ pub enum Runner {
 
     /// Mock runner that only echos its input, useful for testing.
     Echo,
+
+    /// Tunnel runner for port forwarding.
+    Tunnel {
+        /// Target host to connect to.
+        target_host: String,
+        /// Target port to connect to.
+        target_port: u16,
+    },
 }
 
 /// Internal message routed to shell runners.
@@ -48,6 +56,10 @@ impl Runner {
         match self {
             Self::Shell(shell) => shell_task(id, encrypt, shell, shell_rx, output_tx).await,
             Self::Echo => echo_task(id, encrypt, shell_rx, output_tx).await,
+            Self::Tunnel {
+                target_host,
+                target_port,
+            } => tunnel_task(id, encrypt, target_host, *target_port, shell_rx, output_tx).await,
         }
     }
 }
@@ -172,5 +184,77 @@ async fn echo_task(
             ShellData::Size(_, _) => (),
         }
     }
+    Ok(())
+}
+
+/// Asynchronous task handling a tunnel connection within the session.
+async fn tunnel_task(
+    id: Sid,
+    encrypt: Encrypt,
+    target_host: &str,
+    target_port: u16,
+    mut shell_rx: mpsc::Receiver<ShellData>,
+    output_tx: mpsc::Sender<ClientMessage>,
+) -> Result<()> {
+    use sshx_core::proto::{TunnelData, TunnelOpen};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+    
+    // Send tunnel open request
+    let open_msg = TunnelOpen {
+        id: id.0,
+        target_host: target_host.to_string(),
+        target_port: target_port as u32,
+    };
+    output_tx.send(ClientMessage::OpenTunnel(open_msg)).await?;
+    
+    // Connect to target
+    let mut target = TcpStream::connect(format!("{}:{}", target_host, target_port)).await?;
+    
+    let mut seq = 0u64;
+    let mut buf = [0u8; 8192];
+    let mut finished = false;
+    
+    while !finished {
+        tokio::select! {
+            // Read data from target and send to server
+            result = target.read(&mut buf) => {
+                let n = result?;
+                if n == 0 {
+                    finished = true;
+                } else {
+                    let data = encrypt.segment(
+                        0x200000000 | id.0 as u64,
+                        seq,
+                        &buf[..n],
+                    );
+                    let tunnel_data = TunnelData {
+                        id: id.0,
+                        data: data.into(),
+                        offset: seq,
+                    };
+                    output_tx.send(ClientMessage::TunnelData(tunnel_data)).await?;
+                    seq += n as u64;
+                }
+            }
+            // Receive data from server and write to target
+            item = shell_rx.recv() => {
+                match item {
+                    Some(ShellData::Data(data)) => {
+                        target.write_all(&data).await?;
+                    }
+                    Some(ShellData::Sync(_)) => (),
+                    Some(ShellData::Size(_, _)) => (),
+                    None => finished = true,
+                }
+            }
+        }
+    }
+    
+    // Send tunnel close message
+    use sshx_core::proto::TunnelClose;
+    let close_msg = TunnelClose { id: id.0 };
+    output_tx.send(ClientMessage::CloseTunnel(close_msg)).await?;
+    
     Ok(())
 }

@@ -53,10 +53,12 @@ crates/sshx/src/
 
 ### 4. Key Features
 
-**Standalone Operation**
-- Tunnels operate independently of the sshx terminal session
-- Direct TCP connections (not routed through sshx protocol)
-- Immediate usability without server-side changes
+**Hybrid Architecture**
+- Tunnels currently use direct TCP connections for immediate usability
+- Protocol extensions ready: TunnelOpen, TunnelData, TunnelClose messages added to protobuf
+- Runner support added for tunnel tasks alongside shell tasks
+- Controller handlers implemented for tunnel protocol messages
+- Ready for server-side implementation to enable full protocol routing
 
 **Security**
 - Domain name length validation (max 255 chars)
@@ -72,6 +74,44 @@ crates/sshx/src/
 - Support for multiple `-L` and `-D` options
 - Each tunnel runs in its own async task
 - Independent lifecycle management
+
+## Protocol Integration
+
+### Extended Protobuf Definitions
+The sshx protocol has been extended to support tunneling:
+
+```protobuf
+message TunnelOpen {
+  uint32 id = 1;
+  string target_host = 2;
+  uint32 target_port = 3;
+}
+
+message TunnelData {
+  uint32 id = 1;
+  bytes data = 2;
+  uint64 offset = 3;
+}
+
+message TunnelClose {
+  uint32 id = 1;
+}
+```
+
+These messages are integrated into ClientUpdate and ServerUpdate for bidirectional tunnel communication.
+
+### Runner Architecture
+Added `Runner::Tunnel` variant to handle tunnel connections:
+- Connects to target host/port
+- Sends TunnelOpen message through controller
+- Forwards data bidirectionally with encryption
+- Sends TunnelClose on completion
+
+### Controller Integration
+The Controller now handles tunnel protocol messages:
+- `ServerMessage::TunnelData` - routes tunnel data to appropriate tunnel task
+- `ServerMessage::CloseTunnel` - closes tunnel connections from server
+- Ready for server-initiated tunnels (remote forwarding)
 
 ## Implementation Details
 
@@ -120,13 +160,13 @@ All existing sshx tests pass without modification.
 ## Limitations and Future Work
 
 ### Current Limitations
-1. **Protocol Integration**: Tunnels use direct TCP connections rather than routing through the sshx collaborative protocol
+1. **Hybrid Architecture**: Tunnels currently use direct TCP connections for immediate usability. The sshx protocol has been extended with tunnel messages (TunnelOpen, TunnelData, TunnelClose) to support full protocol integration, but this requires server-side implementation.
 2. **Remote Forwarding**: `-R` requires server-side support (not yet implemented)
 3. **Protocol Support**: Only TCP (no UDP)
 4. **Authentication**: SOCKS5 proxy has no authentication
 
 ### Future Enhancements
-1. Full integration with sshx protocol for web-based tunnel management
+1. Full client-to-server tunnel routing through the sshx protocol (protocol extensions ready)
 2. Server-side remote forwarding support
 3. Visual tunnel status in web interface
 4. Tunnel traffic statistics and monitoring

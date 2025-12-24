@@ -36,6 +36,25 @@ message TerminalSize {
   uint32 cols = 3; // Number of columns for the terminal.
 }
 
+// Request to open a new tunnel connection.
+message TunnelOpen {
+  uint32 id = 1;         // ID of the tunnel.
+  string target_host = 2; // Target host to connect to.
+  uint32 target_port = 3; // Target port to connect to.
+}
+
+// Data for a tunnel connection.
+message TunnelData {
+  uint32 id = 1;     // ID of the tunnel.
+  bytes data = 2;    // Encrypted tunnel data.
+  uint64 offset = 3; // Offset of the first byte for encryption.
+}
+
+// Close a tunnel connection.
+message TunnelClose {
+  uint32 id = 1; // ID of the tunnel.
+}
+
 // Request to open an sshx session.
 message OpenRequest {
   string origin = 1;                      // Web origin of the server.
@@ -70,6 +89,9 @@ message ClientUpdate {
     TerminalData data = 2;      // Stream data from the terminal.
     NewShell created_shell = 3; // Acknowledge that a new shell was created.
     uint32 closed_shell = 4;    // Acknowledge that a shell was closed.
+    TunnelOpen open_tunnel = 5; // Request to open a new tunnel.
+    TunnelData tunnel_data = 6; // Data for a tunnel connection.
+    TunnelClose close_tunnel = 7; // Close a tunnel connection.
     fixed64 pong = 14;          // Response for latency measurement.
     string error = 15;
   }
@@ -83,6 +105,8 @@ message ServerUpdate {
     uint32 close_shell = 3;    // ID of a shell to close.
     SequenceNumbers sync = 4;  // Periodic sequence number sync.
     TerminalSize resize = 5;   // Resize a terminal window.
+    TunnelData tunnel_data = 6; // Data from the server for a tunnel.
+    TunnelClose close_tunnel = 7; // Close a tunnel from the server.
     fixed64 ping = 14;         // Request a pong, with the timestamp.
     string error = 15;
   }
