@@ -97,9 +97,6 @@ async fn start(args: Args) -> Result<()> {
 
     // Start tunnel listeners if any tunnels are configured
     if !tunnel_configs.is_empty() {
-        use tokio::sync::mpsc;
-        let (tx, mut rx) = mpsc::channel(100);
-
         for config in tunnel_configs {
             match config {
                 tunnel::TunnelConfig::Local {
@@ -107,19 +104,17 @@ async fn start(args: Args) -> Result<()> {
                     target_host,
                     target_port,
                 } => {
-                    let tx = tx.clone();
                     tokio::spawn(async move {
                         if let Err(e) =
-                            tunnel::run_local_forward(bind_addr, target_host, target_port, tx).await
+                            tunnel::run_local_forward(bind_addr, target_host, target_port).await
                         {
                             error!("Local forward error: {}", e);
                         }
                     });
                 }
                 tunnel::TunnelConfig::Dynamic { bind_addr } => {
-                    let tx = tx.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = tunnel::run_dynamic_forward(bind_addr, tx).await {
+                        if let Err(e) = tunnel::run_dynamic_forward(bind_addr).await {
                             error!("Dynamic forward error: {}", e);
                         }
                     });
@@ -137,25 +132,6 @@ async fn start(args: Args) -> Result<()> {
                 }
             }
         }
-
-        // Spawn a task to handle tunnel messages
-        tokio::spawn(async move {
-            while let Some(msg) = rx.recv().await {
-                // TODO: Send tunnel messages through the sshx protocol
-                use tunnel::TunnelMessage;
-                match msg {
-                    TunnelMessage::Open { tunnel_id, target_host, target_port } => {
-                        tracing::debug!("Tunnel {} open to {}:{}", tunnel_id, target_host, target_port);
-                    }
-                    TunnelMessage::Data { tunnel_id, data } => {
-                        tracing::trace!("Tunnel {} data: {} bytes", tunnel_id, data.len());
-                    }
-                    TunnelMessage::Close { tunnel_id } => {
-                        tracing::debug!("Tunnel {} closed", tunnel_id);
-                    }
-                }
-            }
-        });
     }
 
     let shell = match args.shell {

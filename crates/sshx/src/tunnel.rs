@@ -4,7 +4,6 @@ use anyhow::{anyhow, Context, Result};
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 /// Types of port forwarding supported by SSH tunneling.
@@ -128,8 +127,14 @@ pub fn parse_tunnel_args(
     Ok(configs)
 }
 
-/// Represents a tunnel connection that can send/receive data.
+/// Represents a tunnel connection message.
+/// 
+/// Note: This enum is currently unused but reserved for future protocol integration.
+/// The current implementation creates direct TCP connections rather than routing
+/// through the sshx protocol. Future versions will use these messages to integrate
+/// tunneling with the collaborative terminal session.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum TunnelMessage {
     /// Data to be forwarded through the tunnel
     Data {
@@ -160,7 +165,6 @@ pub async fn run_local_forward(
     bind_addr: SocketAddr,
     target_host: String,
     target_port: u16,
-    tx: mpsc::Sender<TunnelMessage>,
 ) -> Result<()> {
     let listener = TcpListener::bind(bind_addr).await?;
     info!("Local port forwarding: {} -> {}:{}", bind_addr, target_host, target_port);
@@ -171,12 +175,11 @@ pub async fn run_local_forward(
             Ok((stream, peer_addr)) => {
                 debug!("Accepted connection from {} on local port {}", peer_addr, bind_addr);
                 let target_host = target_host.clone();
-                let tx = tx.clone();
                 let id = tunnel_id;
                 tunnel_id = tunnel_id.wrapping_add(1);
 
                 tokio::spawn(async move {
-                    if let Err(e) = handle_local_connection(stream, id, target_host, target_port, tx).await {
+                    if let Err(e) = handle_local_connection(stream, id, target_host, target_port).await {
                         error!("Local forward error: {}", e);
                     }
                 });
@@ -194,20 +197,13 @@ async fn handle_local_connection(
     tunnel_id: u32,
     target_host: String,
     target_port: u16,
-    tx: mpsc::Sender<TunnelMessage>,
 ) -> Result<()> {
-    // Send open request
-    tx.send(TunnelMessage::Open {
-        tunnel_id,
-        target_host: target_host.clone(),
-        target_port,
-    })
-    .await?;
-
     debug!("Tunnel {} opened to {}:{}", tunnel_id, target_host, target_port);
 
-    // For now, create a simple direct connection for demonstration
-    // In a full implementation, this would communicate through the sshx protocol
+    // Create a direct connection to the target
+    // Note: This creates a direct TCP connection rather than tunneling through
+    // the sshx protocol. For full protocol integration, this would need to
+    // communicate with the server through the existing gRPC channel.
     let mut target = TcpStream::connect(format!("{}:{}", target_host, target_port)).await?;
 
     let (mut read_stream, mut write_stream) = stream.split();
@@ -246,7 +242,6 @@ async fn handle_local_connection(
         result = forward_from_target => result?,
     }
 
-    tx.send(TunnelMessage::Close { tunnel_id }).await?;
     debug!("Tunnel {} closed", tunnel_id);
 
     Ok(())
@@ -254,10 +249,7 @@ async fn handle_local_connection(
 
 /// Dynamic port forwarding (SOCKS5 proxy) task.
 /// Creates a SOCKS5 proxy server on the specified port.
-pub async fn run_dynamic_forward(
-    bind_addr: SocketAddr,
-    tx: mpsc::Sender<TunnelMessage>,
-) -> Result<()> {
+pub async fn run_dynamic_forward(bind_addr: SocketAddr) -> Result<()> {
     let listener = TcpListener::bind(bind_addr).await?;
     info!("Dynamic port forwarding (SOCKS5): {}", bind_addr);
 
@@ -266,12 +258,11 @@ pub async fn run_dynamic_forward(
         match listener.accept().await {
             Ok((stream, peer_addr)) => {
                 debug!("Accepted SOCKS5 connection from {}", peer_addr);
-                let tx_clone = tx.clone();
                 let id = tunnel_id;
                 tunnel_id = tunnel_id.wrapping_add(1);
 
                 tokio::spawn(async move {
-                    if let Err(e) = handle_socks5_connection(stream, id, tx_clone).await {
+                    if let Err(e) = handle_socks5_connection(stream, id).await {
                         error!("SOCKS5 error: {}", e);
                     }
                 });
@@ -284,11 +275,7 @@ pub async fn run_dynamic_forward(
 }
 
 /// Handle a single SOCKS5 connection.
-async fn handle_socks5_connection(
-    mut stream: TcpStream,
-    tunnel_id: u32,
-    _tx: mpsc::Sender<TunnelMessage>,
-) -> Result<()> {
+async fn handle_socks5_connection(mut stream: TcpStream, tunnel_id: u32) -> Result<()> {
     // Read SOCKS5 greeting
     let mut buf = vec![0u8; 2];
     stream.read_exact(&mut buf).await?;
@@ -336,6 +323,13 @@ async fn handle_socks5_connection(
             let mut len_buf = vec![0u8; 1];
             stream.read_exact(&mut len_buf).await?;
             let len = len_buf[0] as usize;
+            
+            // Validate domain name length (max 255 characters per DNS spec)
+            if len == 0 || len > 255 {
+                stream.write_all(&[0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await?;
+                return Err(anyhow!("Invalid domain name length: {}", len));
+            }
+            
             let mut domain = vec![0u8; len];
             stream.read_exact(&mut domain).await?;
             let mut port_buf = vec![0u8; 2];
