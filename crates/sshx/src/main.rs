@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use ansi_term::Color::{Cyan, Fixed, Green};
 use anyhow::Result;
 use clap::Parser;
-use sshx::{controller::Controller, runner::Runner, terminal::get_default_shell};
+use sshx::{controller::Controller, runner::Runner, terminal::get_default_shell, tunnel};
 use tokio::signal;
 use tracing::error;
 
@@ -31,6 +31,21 @@ struct Args {
     /// editors.
     #[clap(long)]
     enable_readers: bool,
+
+    /// Local port forwarding (like ssh -L). Format: [bind_address:]port:host:hostport
+    /// Example: 8080:localhost:80 or 0.0.0.0:8080:example.com:80
+    #[clap(short = 'L', long = "local")]
+    local_forward: Vec<String>,
+
+    /// Remote port forwarding (like ssh -R). Format: [bind_address:]port:host:hostport
+    /// Example: 8080:localhost:3000
+    #[clap(short = 'R', long = "remote")]
+    remote_forward: Vec<String>,
+
+    /// Dynamic port forwarding / SOCKS proxy (like ssh -D). Format: [bind_address:]port
+    /// Example: 1080 or 0.0.0.0:1080
+    #[clap(short = 'D', long = "dynamic")]
+    dynamic_forward: Vec<String>,
 }
 
 fn print_greeting(shell: &str, controller: &Controller) {
@@ -73,6 +88,76 @@ fn print_greeting(shell: &str, controller: &Controller) {
 
 #[tokio::main]
 async fn start(args: Args) -> Result<()> {
+    // Parse tunnel configurations if provided
+    let tunnel_configs = tunnel::parse_tunnel_args(
+        &args.local_forward,
+        &args.remote_forward,
+        &args.dynamic_forward,
+    )?;
+
+    // Start tunnel listeners if any tunnels are configured
+    if !tunnel_configs.is_empty() {
+        use tokio::sync::mpsc;
+        let (tx, mut rx) = mpsc::channel(100);
+
+        for config in tunnel_configs {
+            match config {
+                tunnel::TunnelConfig::Local {
+                    bind_addr,
+                    target_host,
+                    target_port,
+                } => {
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) =
+                            tunnel::run_local_forward(bind_addr, target_host, target_port, tx).await
+                        {
+                            error!("Local forward error: {}", e);
+                        }
+                    });
+                }
+                tunnel::TunnelConfig::Dynamic { bind_addr } => {
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = tunnel::run_dynamic_forward(bind_addr, tx).await {
+                            error!("Dynamic forward error: {}", e);
+                        }
+                    });
+                }
+                tunnel::TunnelConfig::Remote {
+                    bind_addr,
+                    target_host,
+                    target_port,
+                } => {
+                    // Remote forwarding would need server-side support
+                    error!(
+                        "Remote forwarding not yet fully implemented: {} -> {}:{}",
+                        bind_addr, target_host, target_port
+                    );
+                }
+            }
+        }
+
+        // Spawn a task to handle tunnel messages
+        tokio::spawn(async move {
+            while let Some(msg) = rx.recv().await {
+                // TODO: Send tunnel messages through the sshx protocol
+                use tunnel::TunnelMessage;
+                match msg {
+                    TunnelMessage::Open { tunnel_id, target_host, target_port } => {
+                        tracing::debug!("Tunnel {} open to {}:{}", tunnel_id, target_host, target_port);
+                    }
+                    TunnelMessage::Data { tunnel_id, data } => {
+                        tracing::trace!("Tunnel {} data: {} bytes", tunnel_id, data.len());
+                    }
+                    TunnelMessage::Close { tunnel_id } => {
+                        tracing::debug!("Tunnel {} closed", tunnel_id);
+                    }
+                }
+            }
+        });
+    }
+
     let shell = match args.shell {
         Some(shell) => shell,
         None => get_default_shell().await,

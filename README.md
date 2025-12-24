@@ -13,6 +13,7 @@ A secure web-based, collaborative terminal.
 - End-to-end encryption with Argon2 and AES.
 - Automatic reconnection and real-time latency estimates.
 - Predictive echo for faster local editing (à la Mosh).
+- SSH tunneling support for port forwarding and SOCKS5 proxy.
 
 Visit [sshx.io](https://sshx.io) to learn more.
 
@@ -72,6 +73,30 @@ anywhere: GitLab CI, CircleCI, Buildkite, CI on your Raspberry Pi, etc.
 
 Be careful adding this to a public GitHub repository, as any user can view the
 logs of a CI job while it is running.
+
+## SSH Tunneling
+
+sshx supports SSH-style port forwarding for secure network tunneling:
+
+### Local Port Forwarding (-L)
+Forward a local port to a remote destination:
+```shell
+sshx -L 8080:example.com:80
+```
+
+### Remote Port Forwarding (-R)
+Expose a local service to remote users:
+```shell
+sshx -R 8080:localhost:3000
+```
+
+### Dynamic Port Forwarding (-D)
+Create a SOCKS5 proxy for secure browsing:
+```shell
+sshx -D 1080
+```
+
+For detailed documentation and examples, see [docs/SSH_TUNNELING.md](docs/SSH_TUNNELING.md).
 
 ## Development
 

@@ -10,3 +10,4 @@ pub mod controller;
 pub mod encrypt;
 pub mod runner;
 pub mod terminal;
+pub mod tunnel;
